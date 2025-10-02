@@ -12,8 +12,9 @@ from k8s.logging import configure_logging
 
 import secrets
 import string
-
-# from modeling.utils.gen_id import gen_id
+from pydantic import BaseModel, Field
+import functools
+import shlex
 
 logger = configure_logging(
     __name__,
@@ -39,8 +40,41 @@ def load_k8s_template(path: Path) -> dict:
 
 
 k8s_app = typer.Typer()
-MODELING_BASE_PATH = Path(__file__).parent.parent.parent.parent
-print(f"{MODELING_BASE_PATH=}")
+# MODELING_BASE_PATH = Path(__file__).parent.parent.parent.parent
+# print(f"{MODELING_BASE_PATH=}")
+
+
+class K8sEnvConfig(BaseModel):
+    bake_target: str = Field()
+    job_template: str = Field()
+    outputs_dir: str = Field(default="eve-outputs")
+    home: str = "."
+
+    @property
+    def home_path(self) -> Path:
+        return Path.cwd() / self.home
+
+    @property
+    def job_template_path(self) -> Path:
+        return self.home_path / self.job_template
+
+    @property
+    def outputs_dir_path(self) -> Path:
+        return self.home_path / self.outputs_dir
+
+
+K8S_ENV_CONFIG_NAME = "k8sconf.toml"
+
+
+@functools.lru_cache()
+def local_k8s_config():
+    local_path = Path.cwd() / K8S_ENV_CONFIG_NAME
+    assert local_path.exists(), f"Local k8s config not found: {local_path}"
+    import tomli
+
+    with open(local_path, "rb") as f:
+        data = tomli.load(f)
+    return K8sEnvConfig(**data)
 
 
 @k8s_app.command()
@@ -49,14 +83,21 @@ def bake(
         bool, typer.Option("--quiet", "-q", help="Hide depot build output")
     ] = False,
     target: Annotated[
-        str, typer.Option("--target", help="Target to build, defaults to 'opencompass'")
-    ] = "opencompass",
+        str | None,
+        typer.Option(
+            "--target",
+            help="Target to build",
+        ),
+    ] = None,
 ):
     """
     Build Docker image using depot and extract image reference.
     """
+    k8s_config = local_k8s_config()
+    target = target if target is not None else k8s_config.bake_target
+
     try:
-        logger.info("Starting depot bake process...")
+        logger.info(f"Starting depot bake process... {target=} {k8s_config.home_path=}")
 
         # Run depot bake --save command
         process = subprocess.Popen(
@@ -66,7 +107,7 @@ def bake(
             text=True,
             bufsize=1,
             universal_newlines=True,
-            cwd=MODELING_BASE_PATH,  # Open in ../
+            cwd=k8s_config.home_path,
         )
 
         output_lines = []
@@ -112,16 +153,16 @@ def bake(
 
 # MDL_TEMPLATE_PATH = MODELING_BASE_PATH / "k8s" / "jobs" / "mdl.yaml"
 
-EVE_TEMPLATE_PATH = MODELING_BASE_PATH / "k8s" / "eval.yaml"
+# EVE_TEMPLATE_PATH = MODELING_BASE_PATH / "k8s" / "eval.yaml"
 
 
-def load_eve_template() -> dict:
+def load_eve_template(path: Path) -> dict:
     """Load the eve k8s job template."""
-    assert EVE_TEMPLATE_PATH.exists(), f"Template file not found: {EVE_TEMPLATE_PATH}"
+    assert path.exists(), f"Template file not found: {path}"
 
-    with open(EVE_TEMPLATE_PATH) as f:
+    with open(path) as f:
         job_template = yaml.safe_load(f)
-    logger.debug(f"Loaded eve job template from: {EVE_TEMPLATE_PATH}")
+    logger.debug(f"Loaded eve job template from: {path}")
     return job_template
 
 
@@ -149,7 +190,7 @@ def eve(
         str | None,
         typer.Option(
             "--image",
-            help="Docker image to use. If not provided, will run bake with target 'opencompass'",
+            help="Docker image to use. If not provided, will run bake with provided target",
         ),
     ] = None,
     quiet: Annotated[
@@ -174,6 +215,8 @@ def eve(
     Submit eve jobs to kubernetes with checkpoint directories and evaluation command.
     """
     # Get eval_cmd from stdin if not provided
+
+    k8s_config = local_k8s_config()
     if eval_cmd is None:
         logger.info("Reading evaluation command from stdin...")
         try:
@@ -185,9 +228,10 @@ def eve(
 
     # Parse the eval_cmd string as a list
     try:
-        import ast
+        eval_cmd_list = shlex.split(eval_cmd)
 
-        eval_cmd_list = ast.literal_eval(eval_cmd)
+        # import ast
+        # eval_cmd_list = ast.literal_eval(eval_cmd)
         if not isinstance(eval_cmd_list, list):
             raise ValueError("Command must be a list")
     except (ValueError, SyntaxError) as e:
@@ -196,8 +240,12 @@ def eve(
 
     # Get the image - either from parameter or by running bake with target 'eve'
     if image is None:
-        logger.info("No image provided, running bake with target 'opencompass'...")
-        image = bake(quiet=quiet, target="opencompass")
+        logger.info(
+            f"No image provided, running bake with target {k8s_config.bake_target=} ..."
+        )
+        image = bake(
+            quiet=quiet,
+        )
     else:
         logger.info(f"Using provided image: {image}")
 
@@ -219,7 +267,7 @@ def eve(
     # logger.info(f"Processing checkpoint: {checkpoint_dir}")
 
     # Load the eve YAML template (fresh copy for each job)
-    job_template = load_eve_template()
+    job_template = load_eve_template(k8s_config.job_template_path)
 
     # Modify the job template
     container = job_template["spec"]["template"]["spec"]["containers"][0]
@@ -237,7 +285,7 @@ def eve(
     current_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
     # Save the modified k8s yaml config
-    output_dir = MODELING_BASE_PATH / "eve-outputs"
+    output_dir = k8s_config.outputs_dir_path
     output_dir.mkdir(parents=True, exist_ok=True)
     yaml_config_path = output_dir / f"{current_timestamp}.yaml"
 
