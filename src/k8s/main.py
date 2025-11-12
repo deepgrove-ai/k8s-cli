@@ -1,22 +1,22 @@
 from __future__ import annotations
 
+import functools
 import logging
 import re
+import secrets
+import shlex
+import string
 import subprocess
 from pathlib import Path
 from typing import Annotated
 
+import tomli
 import typer
 import yaml
-from k8s.logging import configure_logging
-
-import secrets
-import string
 from pydantic import BaseModel, Field
-import functools
-import shlex
-import tomli
 
+from k8s.logging import configure_logging
+from k8s.ray.configure_node import app as ray_app
 
 logger = configure_logging(
     __name__,
@@ -68,7 +68,7 @@ class K8sEnvConfig(BaseModel):
 K8S_ENV_CONFIG_NAME = "k8sconf.toml"
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def local_k8s_config():
     local_path = Path.cwd() / K8S_ENV_CONFIG_NAME
     assert local_path.exists(), f"Local k8s config not found: {local_path}"
@@ -80,7 +80,9 @@ def local_k8s_config():
 
 @k8s_app.command()
 def bake(
-    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Hide depot build output")] = False,
+    quiet: Annotated[
+        bool, typer.Option("--quiet", "-q", help="Hide depot build output")
+    ] = False,
     target: Annotated[
         str | None,
         typer.Option(
@@ -118,7 +120,9 @@ def bake(
 
         process.wait()
         if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, ["depot", "bake", target, "--save"])
+            raise subprocess.CalledProcessError(
+                process.returncode, ["depot", "bake", target, "--save"]
+            )
 
         output = "".join(output_lines)
 
@@ -187,7 +191,9 @@ def eve(
             help="Docker image to use. If not provided, will run bake with provided target",
         ),
     ] = None,
-    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Hide output from the command")] = False,
+    quiet: Annotated[
+        bool, typer.Option("--quiet", "-q", help="Hide output from the command")
+    ] = False,
     context: Annotated[
         str | None,
         typer.Option(
@@ -232,7 +238,9 @@ def eve(
 
     # Get the image - either from parameter or by running bake with target 'eve'
     if image is None:
-        logger.info(f"No image provided, running bake with target {k8s_config.bake_target=} ...")
+        logger.info(
+            f"No image provided, running bake with target {k8s_config.bake_target=} ..."
+        )
         image = bake(
             quiet=quiet,
         )
@@ -264,7 +272,9 @@ def eve(
 
     # Update image
     container["image"] = image
-    job_template["spec"]["template"]["metadata"]["annotations"]["container-image"] = image
+    job_template["spec"]["template"]["metadata"]["annotations"]["container-image"] = (
+        image
+    )
     logger.debug(f"Updated container image to: {image}")
 
     container["args"] = eval_cmd_list
@@ -291,10 +301,14 @@ def eve(
     try:
         # Submit the job
         if dry_run:
-            response = batch_v1.create_namespaced_job(namespace=namespace, body=job_template, dry_run="All")
-            logger.info(f"Dry run successful - job would be created for ")
+            response = batch_v1.create_namespaced_job(
+                namespace=namespace, body=job_template, dry_run="All"
+            )
+            logger.info("Dry run successful - job would be created for ")
         else:
-            response = batch_v1.create_namespaced_job(namespace=namespace, body=job_template)
+            response = batch_v1.create_namespaced_job(
+                namespace=namespace, body=job_template
+            )
             job_name = response.metadata.name  # type: ignore[attr-defined]
             logger.info(f"Successfully submitted eve job: {job_name} for ")
 
@@ -302,8 +316,10 @@ def eve(
         logger.error(f"Failed to submit eve job  to Kubernetes: {e}")
         raise typer.Exit(1) from e
 
-    logger.info(f"Finished processing")
+    logger.info("Finished processing")
 
+
+k8s_app.add_typer(ray_app, name="ray")
 
 if __name__ == "__main__":
     k8s_app()

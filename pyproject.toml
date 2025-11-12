@@ -9,7 +9,15 @@ dependencies = [
     "pydantic>=2.11.9",
     "tomli>=2.2.1",
     "typer>=0.17.4",
+    "utility",
 ]
+
+
+[dependency-groups]
+ray = ["ray[default]"]
+
+[tool.uv.sources]
+"utility" = { workspace = true }
 
 [project.scripts]
 k8s = "k8s.main:k8s_app"
