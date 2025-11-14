@@ -94,7 +94,7 @@ def get_head_pod_ip(
 def get_head_ip_with_timeout(
     label_selector: str,
     namespace: str | None = None,
-    timeout: float = 120.0,
+    timeout: float = 600.0,
     interval: float = 2.0,
 ) -> str:
     """
