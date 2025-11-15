@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-import functools
+import json
 import logging
 import re
-import secrets
 import shlex
-import string
 import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import tomli
 import typer
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from utility.loading_context import Loading
 
+from k8s.config import K8sEnvConfig
 from k8s.logging import configure_logging
 from k8s.ray.configure_node import app as ray_app
 
@@ -24,58 +26,19 @@ logger = configure_logging(
 )
 
 
-def gen_id(length: int = 8) -> str:
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-# TODO: Add -i interactive option to run k8s interactively
-def load_k8s_template(path: Path) -> dict:
-    import yaml
-
-    assert path.exists(), f"Template file not found: {path}"
-
-    with open(path) as f:
-        job_template = yaml.safe_load(f)
-    logger.debug(f"Loaded job template from: {path}")
-    return job_template
-
-
 k8s_app = typer.Typer()
-# MODELING_BASE_PATH = Path(__file__).parent.parent.parent.parent
-# print(f"{MODELING_BASE_PATH=}")
-
-
-class K8sEnvConfig(BaseModel):
-    bake_target: str = Field()
-    job_template: str = Field()
-    outputs_dir: str = Field(default="eve-outputs")
-    home: str = "."
-
-    @property
-    def home_path(self) -> Path:
-        return Path.cwd() / self.home
-
-    @property
-    def job_template_path(self) -> Path:
-        return self.home_path / self.job_template
-
-    @property
-    def outputs_dir_path(self) -> Path:
-        return self.home_path / self.outputs_dir
-
 
 K8S_ENV_CONFIG_NAME = "k8sconf.toml"
 
 
-@functools.lru_cache
-def local_k8s_config():
-    local_path = Path.cwd() / K8S_ENV_CONFIG_NAME
+def local_k8s_config(local_path: Path | None = None):
+    if local_path is None:
+        local_path = Path.cwd() / K8S_ENV_CONFIG_NAME
     assert local_path.exists(), f"Local k8s config not found: {local_path}"
 
     with open(local_path, "rb") as f:
         data = tomli.load(f)
-    return K8sEnvConfig(**data)
+    return K8sEnvConfig.deserialize(data)
 
 
 @k8s_app.command()
@@ -98,43 +61,41 @@ def bake(
     target = target if target is not None else k8s_config.bake_target
 
     try:
-        logger.info(f"Starting depot bake process... {target=} {k8s_config.home_path=}")
-
-        # Run depot bake --save command
-        process = subprocess.Popen(
-            ["depot", "bake", target, "--save"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
-            cwd=k8s_config.home_path,
-        )
-
-        output_lines = []
-        assert process.stdout is not None, "Process stdout should not be None"
-        for line in process.stdout:
-            if not quiet:
-                print(line, end="")  # Print in real-time
-            output_lines.append(line)
-
-        process.wait()
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(
-                process.returncode, ["depot", "bake", target, "--save"]
+        with Loading(f"Baking depot {target=} {k8s_config.home_path=} ..."):
+            # Run depot bake --save command
+            process = subprocess.Popen(
+                ["depot", "bake", target, "--save"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                cwd=k8s_config.home_path,
             )
 
-        output = "".join(output_lines)
+            output_lines = []
+            assert process.stdout is not None, "Process stdout should not be None"
+            for line in process.stdout:
+                if not quiet:
+                    print(line, end="")  # Print in real-time
+                output_lines.append(line)
 
-        # Look for image reference pattern (e.g., registry.depot.dev/v2tbx2d1w1:snsd7rnnn4-remote)
-        image_pattern = r"registry\.depot\.dev/[a-zA-Z0-9]+:[a-zA-Z0-9\-]+"
-        matches = re.findall(image_pattern, output)
+            process.wait()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    process.returncode, ["depot", "bake", target, "--save"]
+                )
+
+            output = "".join(output_lines)
+
+            # Look for image reference pattern (e.g., registry.depot.dev/v2tbx2d1w1:snsd7rnnn4-remote)
+            image_pattern = r"registry\.depot\.dev/[a-zA-Z0-9]+:[a-zA-Z0-9\-]+"
+            matches = re.findall(image_pattern, output)
 
         if matches:
             image_ref = matches[-1]  # Take the last match (most recent)
             assert isinstance(image_ref, str), "Image reference should be a string"
             logger.info(f"Successfully built image: {image_ref}")
-            print(f"Built image: {image_ref}")
             return image_ref
         else:
             logger.error("Could not extract image reference from depot output")
@@ -152,9 +113,120 @@ def bake(
         raise typer.Exit(1) from e
 
 
-# MDL_TEMPLATE_PATH = MODELING_BASE_PATH / "k8s" / "jobs" / "mdl.yaml"
+def subprocess_run(cmd: list[str], **kwargs):
+    try:
+        return subprocess.run(
+            cmd,
+            check=True,
+            text=True,
+            **kwargs,
+        )
+    except subprocess.CalledProcessError as e:
+        logger.error(f"\n❌ Command failed: {cmd}")
+        raise e
 
-# EVE_TEMPLATE_PATH = MODELING_BASE_PATH / "k8s" / "eval.yaml"
+
+@k8s_app.command()
+def submit(
+    helm_template: Annotated[
+        str | None,
+        typer.Option(
+            "--helm-template",
+            help="Helm template to use",
+        ),
+    ] = None,
+    outputs_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--outputs-dir",
+            help="Outputs directory to use",
+        ),
+    ] = None,
+    values_json: Annotated[
+        str,
+        typer.Option(
+            "--values",
+            help="Values to pass to the helm template",
+        ),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Perform a dry run without actually submitting the job",
+        ),
+    ] = False,
+):
+    k8s_config = local_k8s_config()
+    helm_template_path = (
+        Path(helm_template)
+        if helm_template is not None
+        else k8s_config.helm_template_path
+    )
+    logger.info(
+        f"Submitting helm template: {helm_template_path} with values: {values_json}"
+    )
+    set_arg = ["--set-json", f"k8s={values_json}"] if values_json else []
+    rendered = subprocess_run(
+        [
+            "helm",
+            "template",
+            str(helm_template_path),
+            *set_arg,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,
+    ).stdout
+
+    # Determine output directory
+    output_dir = (
+        Path(outputs_dir)
+        if outputs_dir is not None
+        else k8s_config.home_path / k8s_config.outputs_dir
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate timestamp and save rendered YAML
+    current_timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    yaml_output_path = output_dir / f"{current_timestamp}.yaml"
+
+    with open(yaml_output_path, "w") as f:
+        f.write(rendered)
+    logger.info(f"Saved rendered YAML to: {yaml_output_path}")
+
+    return subprocess_run(
+        [
+            "kubectl",
+            "create",
+            *(("--dry-run=server",) if dry_run else []),
+            "-f",
+            str(yaml_output_path),
+        ],
+    )
+
+
+class BakeSubmitArgs(BaseModel):
+    values: list[dict]
+    image: str | None = None
+    dry_run: bool = False
+    helm_template: str | None = None
+    target: str | None = None
+    outputs_dir: str | None = None
+
+    def bake_and_submit(self):
+        assert len(self.values) > 0, "At least one value must be provided"
+        if self.image is None:
+            self.image = bake(target=self.target, quiet=True)
+
+        for value in self.values:
+            values_json = json.dumps({**value, "image": self.image})
+            submit(
+                helm_template=self.helm_template,
+                values_json=values_json,
+                dry_run=self.dry_run,
+                outputs_dir=self.outputs_dir,
+            )
+        logger.info(f"Submitted {len(self.values)} jobs")
 
 
 def load_eve_template(path: Path) -> dict:
