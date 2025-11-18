@@ -59,6 +59,7 @@ def bake(
     """
     k8s_config = local_k8s_config()
     target = target if target is not None else k8s_config.bake_target
+    output_lines: list[str] = []
 
     try:
         with Loading(f"Baking depot {target=} {k8s_config.home_path=} ..."):
@@ -73,7 +74,6 @@ def bake(
                 cwd=k8s_config.home_path,
             )
 
-            output_lines = []
             assert process.stdout is not None, "Process stdout should not be None"
             for line in process.stdout:
                 if not quiet:
@@ -109,7 +109,8 @@ def bake(
         raise typer.Exit(1) from e
     except FileNotFoundError as e:
         logger.error("depot command not found. Please ensure depot CLI is installed")
-        print("Error: depot command not found. Please ensure depot CLI is installed")
+        if quiet:
+            print("\n".join(output_lines))
         raise typer.Exit(1) from e
 
 
