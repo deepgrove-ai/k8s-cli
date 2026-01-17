@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
@@ -11,6 +12,15 @@ from kubernetes import client, config
 from kubernetes.client.models.v1_pod import V1Pod
 from pydantic import BaseModel, computed_field
 from utility.logging import configure_logging
+
+
+def node_resource_str(node_id: int) -> str:
+    """
+    Generate a resource string for a node based on its ID.
+    This is used to specify resources for Ray actors.
+    """
+    return f"Node{node_id}"
+
 
 logger = configure_logging(
     __name__,
@@ -120,9 +130,7 @@ def get_head_ip_with_timeout(
             return get_head_pod_ip(label_selector=label_selector, namespace=namespace)
         except Exception as e:
             last_error = str(e)
-            logger.debug(
-                f"Attempt to get head pod IP failed: {e}. Retrying... ({elapsed:.1f}s elapsed)"
-            )
+            logger.debug(f"Attempt to get head pod IP failed: {e}. Retrying... ({elapsed:.1f}s elapsed)")
             time.sleep(interval)
 
 
@@ -135,9 +143,7 @@ HEAD_SCRIPT_ENV = {
 def run_ray_head(submit_script: str | None = None):
     head_env = RayHeadNodeEnv.from_env()
     logger.info(f"Head env: {head_env}")
-    head_pod_ip = get_head_ip_with_timeout(
-        label_selector=f"batch.kubernetes.io/job-name={head_env.ray_head_job_name}"
-    )
+    head_pod_ip = get_head_ip_with_timeout(label_selector=f"batch.kubernetes.io/job-name={head_env.ray_head_job_name}")
     with initialize_ray_head(address=head_pod_ip):
         logger.info("Ray head node is running.")
 
@@ -156,9 +162,7 @@ def run_ray_head(submit_script: str | None = None):
                 "CHECKPOINT_BASEDIR": CHECKPOINT_BASEDIR,
             }
 
-            result = subprocess.run(
-                submit_script, shell=True, capture_output=False, env=script_env
-            )
+            result = subprocess.run(submit_script, shell=True, capture_output=False, env=script_env)
             logger.info(f"Submit script exited with code {result.returncode}")
         else:
             import time
@@ -194,9 +198,7 @@ def wait_for_service(
     while True:
         elapsed = time.monotonic() - start
         if elapsed > timeout:
-            raise TimeoutError(
-                f"Service at {host}:{port} not reachable after {timeout:.1f}s"
-            )
+            raise TimeoutError(f"Service at {host}:{port} not reachable after {timeout:.1f}s")
 
         if is_tcp_open(host, port):
             waited = time.monotonic() - start
@@ -206,13 +208,8 @@ def wait_for_service(
             )
             return
         tries += 1
-        if (
-            announce_every is not None
-            and (tries * interval) % max(announce_every, 1) < 1e-9
-        ):
-            print(
-                f"⏳ Waiting for {host}:{port} ... ({elapsed:.0f}s elapsed)", flush=True
-            )
+        if announce_every is not None and (tries * interval) % max(announce_every, 1) < 1e-9:
+            print(f"⏳ Waiting for {host}:{port} ... ({elapsed:.0f}s elapsed)", flush=True)
         time.sleep(interval)
 
 
@@ -222,10 +219,9 @@ def launch_ray():
     logger.info(f"Worker env: {worker_env}")
 
     # Wait until the head node is ready
-    head_pod_ip = get_head_ip_with_timeout(
-        label_selector=f"batch.kubernetes.io/job-name={worker_env.ray_head_job_name}"
-    )
+    head_pod_ip = get_head_ip_with_timeout(label_selector=f"batch.kubernetes.io/job-name={worker_env.ray_head_job_name}")
     logger.info(f"Head pod IP: {head_pod_ip}")
+    resources = {node_resource_str(worker_env.RANK): 1.0}
 
     wait_for_service(head_pod_ip, 6379)
 
@@ -238,6 +234,7 @@ def launch_ray():
             [
                 f"--address={head_pod_ip}:6379",
                 "--num-gpus=8",
+                f"--resources={json.dumps(resources)}",
                 "--block",
             ]
         ),

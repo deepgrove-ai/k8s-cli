@@ -12,6 +12,9 @@ from pydantic import AnyUrl, UrlConstraints
 from utility.logging import configure_logging
 
 
+logger = configure_logging(__name__, level=logging.DEBUG)
+
+
 @contextmanager
 def temp_env(environ: dict[str, str | None]):
     """
@@ -37,9 +40,6 @@ def temp_env(environ: dict[str, str | None]):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = original_value
-
-
-logger = configure_logging(__name__, level=logging.DEBUG)
 
 
 # This is really stupid - if we try to start ray with the default LD_LIBRARY_PATH
@@ -93,7 +93,7 @@ def initialize_ray_head(
                 # "CUDA_VISIBLE_DEVICES": "",
             }
         ):
-            logger.debug(f"Starting Ray head node at {port} with {resources=}")
+            logger.debug(f"Starting Ray head node at {port=} with {resources=}")
             ray_cli.start.main(
                 # URL interpolation is so troll
                 args=filter_none(
@@ -115,9 +115,7 @@ def initialize_ray_head(
         with temp_env({"RAY_DEDUP_LOGS": "0"}):
             # Wait for the Ray head node to be fully initialized
             ray.init()
-        assert ray.is_initialized(), (
-            "Ray failed to initialize. Please check the logs for more details."
-        )
+        assert ray.is_initialized(), "Ray failed to initialize. Please check the logs for more details."
         logger.debug(f"Ray head node finished initializing at {port}")
         logger.debug(f"{ray.cluster_resources()=}")
         yield
