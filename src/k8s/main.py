@@ -20,6 +20,7 @@ from k8s.config import K8sEnvConfig
 from k8s.logging import configure_logging
 from k8s.ray.configure_node import app as ray_app
 
+
 logger = configure_logging(
     __name__,
     level=logging.INFO,
@@ -43,9 +44,7 @@ def local_k8s_config(local_path: Path | None = None):
 
 @k8s_app.command()
 def bake(
-    quiet: Annotated[
-        bool, typer.Option("--quiet", "-q", help="Hide depot build output")
-    ] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Hide depot build output")] = False,
     target: Annotated[
         str | None,
         typer.Option(
@@ -82,9 +81,7 @@ def bake(
 
             process.wait()
             if process.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    process.returncode, ["depot", "bake", target, "--save"]
-                )
+                raise subprocess.CalledProcessError(process.returncode, ["depot", "bake", target, "--save"])
 
             output = "".join(output_lines)
 
@@ -120,11 +117,11 @@ def subprocess_run(cmd: list[str], **kwargs):
             cmd,
             check=True,
             text=True,
+            stderr=subprocess.PIPE,  # 👈 critical
             **kwargs,
         )
     except subprocess.CalledProcessError as e:
-        logger.error(f"\n❌ Command failed: {cmd}")
-        raise e
+        raise RuntimeError(f"❌ Command failed {e.returncode=} {e.cmd=}{e.stdout=} {e.stderr}") from e
 
 
 @k8s_app.command()
@@ -159,14 +156,8 @@ def submit(
     ] = False,
 ):
     k8s_config = local_k8s_config()
-    helm_template_path = (
-        Path(helm_template)
-        if helm_template is not None
-        else k8s_config.helm_template_path
-    )
-    logger.info(
-        f"Submitting helm template: {helm_template_path} with values: {values_json}"
-    )
+    helm_template_path = Path(helm_template) if helm_template is not None else k8s_config.helm_template_path
+    logger.info(f"Submitting helm template: {helm_template_path} with values: {values_json}")
     set_arg = ["--set-json", f"k8s={values_json}"] if values_json else []
     rendered = subprocess_run(
         [
@@ -176,15 +167,10 @@ def submit(
             *set_arg,
         ],
         stdout=subprocess.PIPE,
-        stderr=sys.stderr,
     ).stdout
 
     # Determine output directory
-    output_dir = (
-        Path(outputs_dir)
-        if outputs_dir is not None
-        else k8s_config.home_path / k8s_config.outputs_dir
-    )
+    output_dir = Path(outputs_dir) if outputs_dir is not None else k8s_config.home_path / k8s_config.outputs_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate timestamp and save rendered YAML
@@ -264,9 +250,7 @@ def eve(
             help="Docker image to use. If not provided, will run bake with provided target",
         ),
     ] = None,
-    quiet: Annotated[
-        bool, typer.Option("--quiet", "-q", help="Hide output from the command")
-    ] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Hide output from the command")] = False,
     context: Annotated[
         str | None,
         typer.Option(
@@ -311,9 +295,7 @@ def eve(
 
     # Get the image - either from parameter or by running bake with target 'eve'
     if image is None:
-        logger.info(
-            f"No image provided, running bake with target {k8s_config.bake_target=} ..."
-        )
+        logger.info(f"No image provided, running bake with target {k8s_config.bake_target=} ...")
         image = bake(
             quiet=quiet,
         )
@@ -345,9 +327,7 @@ def eve(
 
     # Update image
     container["image"] = image
-    job_template["spec"]["template"]["metadata"]["annotations"]["container-image"] = (
-        image
-    )
+    job_template["spec"]["template"]["metadata"]["annotations"]["container-image"] = image
     logger.debug(f"Updated container image to: {image}")
 
     container["args"] = eval_cmd_list
@@ -374,14 +354,10 @@ def eve(
     try:
         # Submit the job
         if dry_run:
-            response = batch_v1.create_namespaced_job(
-                namespace=namespace, body=job_template, dry_run="All"
-            )
+            response = batch_v1.create_namespaced_job(namespace=namespace, body=job_template, dry_run="All")
             logger.info("Dry run successful - job would be created for ")
         else:
-            response = batch_v1.create_namespaced_job(
-                namespace=namespace, body=job_template
-            )
+            response = batch_v1.create_namespaced_job(namespace=namespace, body=job_template)
             job_name = response.metadata.name  # type: ignore[attr-defined]
             logger.info(f"Successfully submitted eve job: {job_name} for ")
 
