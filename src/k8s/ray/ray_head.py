@@ -67,6 +67,10 @@ def filter_none[T](l: list[T | None]) -> list[T]:
     return [x for x in l if x is not None]
 
 
+def ray_no_dedup(msg: str) -> str:
+    return f"RAY_NO_DEDUP: {msg}"
+
+
 @contextmanager
 def initialize_ray_head(
     address: str | None = None,
@@ -88,6 +92,7 @@ def initialize_ray_head(
                 # Also, capture the stdout of the `ray_cli.start` command and put those in seperate logs so we can
                 # always enable RAY_LOG_TO_STDERR
                 # "RAY_LOG_TO_STDERR": "1",
+                "RAY_DEDUP_LOGS_ALLOW_REGEX": ".*RAY_NO_DEDUP.*",
                 "RAY_allow_out_of_band_object_ref_serialization": "0",
                 # Set CUDA_VISIBLE_DEVICES to empty string to avoid ray trying to use GPUs on the head node.
                 # "CUDA_VISIBLE_DEVICES": "",

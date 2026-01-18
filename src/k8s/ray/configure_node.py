@@ -96,9 +96,11 @@ def get_head_pod_ip(
     running_pods: list[V1Pod] = [pod for pod in pods if pod.status.phase == "Running"]
 
     assert len(running_pods) == 1, f"{len(running_pods)=}, {label_selector=}"
+    pod_ip = getattr(running_pods[0].status, "pod_ip", None)
+    assert isinstance(pod_ip, str), f"Pod IP not assigned yet for pod {running_pods[0].metadata=}"
     # head_pod = json.loads(running_pods[0])
     # print(type(running_pods[0]))
-    return running_pods[0].status.pod_ip
+    return pod_ip
 
 
 def get_head_ip_with_timeout(
