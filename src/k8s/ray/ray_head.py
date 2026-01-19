@@ -78,28 +78,27 @@ def initialize_ray_head(
     resources: dict[str, float] | None = None,
     ray_head_env: dict[str, str | None] | None = None,
 ):
-    logger.debug("Initializing Ray head node...")
     assert not ray.is_initialized(), "Ray is already initialized."
+    ray_head_env = {
+        "LD_LIBRARY_PATH": None,
+        # TODO(logging): Ray logs are chanelled through `from ray.autoscaler._private.cli_logger import cli_logger`
+        # Put these in seperate logs.
+        # Also, capture the stdout of the `ray_cli.start` command and put those in seperate logs so we can
+        # always enable RAY_LOG_TO_STDERR
+        # "RAY_LOG_TO_STDERR": "1",
+        "RAY_DEDUP_LOGS_ALLOW_REGEX": ".*RAY_NO_DEDUP.*",
+        "RAY_allow_out_of_band_object_ref_serialization": "0",
+        # Set CUDA_VISIBLE_DEVICES to empty string to avoid ray trying to use GPUs on the head node.
+        # "CUDA_VISIBLE_DEVICES": "",
+        **(ray_head_env or {}),
+    }
+    logger.debug(f"Initializing Ray head node {ray_head_env=}")
 
     # resolved_host = services.resolve_ip_for_localhost(HOST)
     # Scheme here is whatever for now idk
 
     try:
-        with temp_env(
-            {
-                "LD_LIBRARY_PATH": None,
-                # TODO(logging): Ray logs are chanelled through `from ray.autoscaler._private.cli_logger import cli_logger`
-                # Put these in seperate logs.
-                # Also, capture the stdout of the `ray_cli.start` command and put those in seperate logs so we can
-                # always enable RAY_LOG_TO_STDERR
-                # "RAY_LOG_TO_STDERR": "1",
-                "RAY_DEDUP_LOGS_ALLOW_REGEX": ".*RAY_NO_DEDUP.*",
-                "RAY_allow_out_of_band_object_ref_serialization": "0",
-                # Set CUDA_VISIBLE_DEVICES to empty string to avoid ray trying to use GPUs on the head node.
-                # "CUDA_VISIBLE_DEVICES": "",
-                **(ray_head_env or {}),
-            }
-        ):
+        with temp_env(ray_head_env):
             logger.debug(f"Starting Ray head node at {port=} with {resources=}")
             ray_cli.start.main(
                 # URL interpolation is so troll
