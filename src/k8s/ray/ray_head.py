@@ -76,6 +76,7 @@ def initialize_ray_head(
     address: str | None = None,
     port: int = 6379,
     resources: dict[str, float] | None = None,
+    ray_head_env: dict[str, str | None] | None = None,
 ):
     logger.debug("Initializing Ray head node...")
     assert not ray.is_initialized(), "Ray is already initialized."
@@ -96,6 +97,7 @@ def initialize_ray_head(
                 "RAY_allow_out_of_band_object_ref_serialization": "0",
                 # Set CUDA_VISIBLE_DEVICES to empty string to avoid ray trying to use GPUs on the head node.
                 # "CUDA_VISIBLE_DEVICES": "",
+                **(ray_head_env or {}),
             }
         ):
             logger.debug(f"Starting Ray head node at {port=} with {resources=}")
@@ -117,9 +119,8 @@ def initialize_ray_head(
                 # Otherwise click will os.exit on completion
                 standalone_mode=False,
             )
-        with temp_env({"RAY_DEDUP_LOGS": "0"}):
             # Wait for the Ray head node to be fully initialized
-            ray.init()
+        ray.init()
         assert ray.is_initialized(), "Ray failed to initialize. Please check the logs for more details."
         logger.debug(f"Ray head node finished initializing at {port}")
         logger.debug(f"{ray.cluster_resources()=}")
