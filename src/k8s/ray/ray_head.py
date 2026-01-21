@@ -111,7 +111,7 @@ def initialize_ray_head(
                         "--disable-usage-stats",
                         # TODO:https://github.com/ray-project/ray/issues/45602 runtime_env excludes
                         # TODO: ray dashboard configuration
-                        # "--dashboard-host=0.0.0.0",
+                        "--dashboard-host=0.0.0.0",
                     ]
                 ),
                 prog_name="ray",
